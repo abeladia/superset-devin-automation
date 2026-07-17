@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Superset · Devin Automation Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel-2: #1c232c; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #388bfd;
+    --green: #3fb950; --amber: #d29922; --red: #f85149; --violet: #a371f7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px; line-height: 1.5;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 22px 60px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 22px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  h1 .sub { color: var(--muted); font-weight: 400; font-size: 14px; margin-left: 8px; }
+  .meta { color: var(--muted); font-size: 12.5px; display: flex; align-items: center; gap: 14px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 6px; box-shadow: 0 0 0 3px rgba(63,185,80,.15); }
+  .demo-banner { background: rgba(210,153,34,.12); border: 1px solid rgba(210,153,34,.4); color: var(--amber);
+    padding: 8px 14px; border-radius: 8px; font-size: 12.5px; margin-bottom: 20px; display: none; }
+  .kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 22px; }
+  .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 16px 14px; }
+  .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .kpi .value { font-size: 28px; font-weight: 680; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .kpi .foot { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .grid { display: grid; grid-template-columns: 1.05fr 1.55fr; gap: 16px; margin-bottom: 22px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 14px; font-weight: 600; }
+  .chart-box { position: relative; height: 240px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--muted); font-weight: 500; font-size: 11.5px; text-transform: uppercase;
+    letter-spacing: .03em; padding: 0 10px 10px; border-bottom: 1px solid var(--border); }
+  td { padding: 11px 10px; border-bottom: 1px solid var(--panel-2); vertical-align: middle; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+  .issue-title { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .b-success { background: rgba(63,185,80,.15); color: var(--green); }
+  .b-active  { background: rgba(56,139,253,.15); color: var(--accent); }
+  .b-failed  { background: rgba(248,81,73,.15); color: var(--red); }
+  .b-nopr    { background: rgba(163,113,247,.15); color: var(--violet); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .muted { color: var(--muted); }
+  .toggle { cursor: pointer; user-select: none; }
+  @media (max-width: 900px) { .kpis { grid-template-columns: repeat(2,1fr); } .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Devin Automation <span class="sub">apache/superset remediation</span></h1>
+    <div class="meta">
+      <span><span class="dot"></span><span id="live-label">live</span></span>
+      <span id="updated">—</span>
+      <span class="toggle" id="refresh-toggle" title="Toggle auto-refresh">⟳ auto: on</span>
+    </div>
+  </header>
+
+  <div class="demo-banner" id="demo-banner">
+    Showing bundled <strong>demo data</strong> — could not reach <code>/metrics</code>. Serve this page from the running API (<code>GET /dashboard</code>) to see live data.
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="label">Dispatched</div><div class="value" id="k-total">—</div><div class="foot">issues sent to Devin</div></div>
+    <div class="kpi"><div class="label">In flight</div><div class="value" id="k-active">—</div><div class="foot" id="k-active-foot">active sessions</div></div>
+    <div class="kpi"><div class="label">Success rate</div><div class="value" id="k-success">—</div><div class="foot" id="k-success-foot">PR opened / completed</div></div>
+    <div class="kpi"><div class="label">PRs opened</div><div class="value" id="k-prs">—</div><div class="foot">merge-ready output</div></div>
+    <div class="kpi"><div class="label">Median time to PR</div><div class="value" id="k-ttpr">—</div><div class="foot" id="k-ttpr-foot">dispatch → PR</div></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Outcome breakdown</h2>
+      <div class="chart-box"><canvas id="donut"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Throughput by day</h2>
+      <div class="chart-box"><canvas id="bars"></canvas></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Sessions</h2>
+    <table>
+      <thead><tr>
+        <th>Issue</th><th>Status</th><th>Duration</th><th>Devin</th><th>Pull request</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// Same-origin by default: when served at /dashboard, this hits /metrics on the API.
+const API_BASE = "";
+let autoRefresh = true, timer = null, donutChart = null, barChart = null;
+
+// Bundled fallback so the page renders standalone (file://) for previews & screenshots.
+const DEMO = {
+  generated_at: new Date().toISOString(),
+  totals: { total: 7, active: 2, completed: 5, success: 4, finished_no_pr: 0, failed: 1 },
+  success_rate: 0.8, pr_rate: 0.571,
+  time_to_pr: { count: 4, avg_minutes: 34.5, median_minutes: 31.0, p90_minutes: 52.0, fastest_minutes: 22.0, slowest_minutes: 55.0 },
+  throughput: [
+    { date: "2026-07-14", dispatched: 4, completed: 3 },
+    { date: "2026-07-15", dispatched: 3, completed: 2 }
+  ],
+  sessions: [
+    { issue_number: 1, issue_title: "Remove any-based reducer debt from SqlLab state handling", issue_url: "https://github.com/abeladia/superset_update/issues/1", bucket: "success", status: "finished", phase: null, duration_minutes: 28.0, devin_url: "https://app.devin.ai/sessions/demo1", pr_url: "https://github.com/abeladia/superset_update/pull/9" },
+    { issue_number: 2, issue_title: "Finish SqlLab component and middleware typing cleanup", issue_url: "https://github.com/abeladia/superset_update/issues/2", bucket: "success", status: "finished", phase: null, duration_minutes: 55.0, devin_url: "https://app.devin.ai/sessions/demo2", pr_url: "https://github.com/abeladia/superset_update/pull/10" },
+    { issue_number: 3, issue_title: "Migrate SqlLab tests away from deprecated describe() nesting", issue_url: "https://github.com/abeladia/superset_update/issues/3", bucket: "success", status: "finished", phase: null, duration_minutes: 31.0, devin_url: "https://app.devin.ai/sessions/demo3", pr_url: "https://github.com/abeladia/superset_update/pull/11" },
+    { issue_number: 4, issue_title: "Replace remaining direct Ant Design runtime imports in app code", issue_url: "https://github.com/abeladia/superset_update/issues/4", bucket: "success", status: "finished", phase: null, duration_minutes: 24.0, devin_url: "https://app.devin.ai/sessions/demo4", pr_url: "https://github.com/abeladia/superset_update/pull/12" },
+    { issue_number: 5, issue_title: "Audit and prune temporary Dependabot ignore rules", issue_url: "https://github.com/abeladia/superset_update/issues/5", bucket: "failed", status: "blocked", phase: null, duration_minutes: 12.0, devin_url: "https://app.devin.ai/sessions/demo5", pr_url: null },
+    { issue_number: 6, issue_title: "Continue retiring the legacy Cypress harness", issue_url: "https://github.com/abeladia/superset_update/issues/6", bucket: "active", status: "dispatched", phase: "working", duration_minutes: null, devin_url: "https://app.devin.ai/sessions/demo6", pr_url: null },
+    { issue_number: 7, issue_title: "Align developer docs with the Playwright-first testing strategy", issue_url: "https://github.com/abeladia/superset_update/issues/7", bucket: "active", status: "dispatched", phase: "working", duration_minutes: null, devin_url: "https://app.devin.ai/sessions/demo7", pr_url: null }
+  ]
+};
+
+const pct = x => x == null ? "—" : Math.round(x * 100) + "%";
+const mins = x => x == null ? "—" : (x >= 60 ? (x/60).toFixed(1) + "h" : Math.round(x) + "m");
+const badgeClass = b => ({ success: "b-success", active: "b-active", failed: "b-failed", finished_no_pr: "b-nopr" }[b] || "b-active");
+const badgeLabel = s => {
+  if (s.bucket === "active") return s.phase ? s.phase : "in progress";
+  if (s.bucket === "success") return "PR opened";
+  if (s.bucket === "finished_no_pr") return "finished · no PR";
+  return s.status;
+};
+
+async function load() {
+  let data, live = true;
+  try {
+    const r = await fetch(`${API_BASE}/metrics`, { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    data = await r.json();
+  } catch (e) { data = DEMO; live = false; }
+
+  document.getElementById("demo-banner").style.display = live ? "none" : "block";
+  document.getElementById("live-label").textContent = live ? "live" : "demo";
+  document.getElementById("updated").textContent =
+    "updated " + new Date(data.generated_at).toLocaleTimeString();
+
+  const t = data.totals;
+  document.getElementById("k-total").textContent = t.total;
+  document.getElementById("k-active").textContent = t.active;
+  document.getElementById("k-success").textContent = pct(data.success_rate);
+  document.getElementById("k-success-foot").textContent = `${t.success} PR / ${t.completed} done`;
+  document.getElementById("k-prs").textContent = t.success;
+  const ttpr = data.time_to_pr;
+  document.getElementById("k-ttpr").textContent = ttpr ? mins(ttpr.median_minutes) : "—";
+  document.getElementById("k-ttpr-foot").textContent = ttpr ? `p90 ${mins(ttpr.p90_minutes)} · n=${ttpr.count}` : "no PRs yet";
+
+  renderDonut(t);
+  renderBars(data.throughput || []);
+  renderRows(data.sessions || []);
+}
+
+function renderDonut(t) {
+  const cfg = {
+    type: "doughnut",
+    data: {
+      labels: ["PR opened", "Finished · no PR", "Failed / blocked", "In flight"],
+      datasets: [{
+        data: [t.success, t.finished_no_pr, t.failed, t.active],
+        backgroundColor: ["#3fb950", "#a371f7", "#f85149", "#388bfd"],
+        borderColor: "#161b22", borderWidth: 2
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: "62%",
+      plugins: { legend: { position: "bottom", labels: { color: "#8b949e", boxWidth: 12, padding: 14 } } }
+    }
+  };
+  if (donutChart) { donutChart.data = cfg.data; donutChart.update(); }
+  else donutChart = new Chart(document.getElementById("donut"), cfg);
+}
+
+function renderBars(series) {
+  const cfg = {
+    type: "bar",
+    data: {
+      labels: series.map(d => d.date),
+      datasets: [
+        { label: "Dispatched", data: series.map(d => d.dispatched), backgroundColor: "#388bfd" },
+        { label: "Completed", data: series.map(d => d.completed), backgroundColor: "#3fb950" }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { grid: { display: false }, ticks: { color: "#8b949e" } },
+        y: { beginAtZero: true, grid: { color: "#21262d" }, ticks: { color: "#8b949e", precision: 0 } }
+      },
+      plugins: { legend: { position: "bottom", labels: { color: "#8b949e", boxWidth: 12, padding: 14 } } }
+    }
+  };
+  if (barChart) { barChart.data = cfg.data; barChart.update(); }
+  else barChart = new Chart(document.getElementById("bars"), cfg);
+}
+
+function renderRows(sessions) {
+  const tbody = document.getElementById("rows");
+  tbody.innerHTML = sessions.map(s => `
+    <tr>
+      <td>
+        <a href="${s.issue_url}" target="_blank">#${s.issue_number}</a>
+        <span class="issue-title" title="${(s.issue_title||"").replace(/"/g,"&quot;")}"> ${s.issue_title || ""}</span>
+      </td>
+      <td><span class="badge ${badgeClass(s.bucket)}">${badgeLabel(s)}</span></td>
+      <td>${mins(s.duration_minutes)}</td>
+      <td>${s.devin_url ? `<a href="${s.devin_url}" target="_blank" class="mono">session ↗</a>` : "—"}</td>
+      <td>${s.pr_url ? `<a href="${s.pr_url}" target="_blank">${s.pr_url.split("/").slice(-2).join(" #").replace("pull #","PR #")}</a>` : '<span class="muted">—</span>'}</td>
+    </tr>`).join("");
+}
+
+document.getElementById("refresh-toggle").addEventListener("click", () => {
+  autoRefresh = !autoRefresh;
+  document.getElementById("refresh-toggle").textContent = "⟳ auto: " + (autoRefresh ? "on" : "off");
+  schedule();
+});
+function schedule() {
+  if (timer) clearInterval(timer);
+  if (autoRefresh) timer = setInterval(load, 15000);
+}
+load();
+schedule();
+</script>
+</body>
+</html>
