@@ -1,0 +1,25 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Node (local ngrok tooling)
+node_modules/
+
+# Runtime / local data
+*.db
+data/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
