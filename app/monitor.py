@@ -43,6 +43,29 @@ async def monitor_session(
                 f"status_enum={status.status_enum} pr_url={status.pr_url}",
             )
 
+            # Resolve PR URL: prefer Devin's response, fall back to GitHub search
+            pr_url = status.pr_url
+            if not pr_url:
+                pr_url = github_client.find_pr_for_issue(repo, issue_number)
+                if pr_url:
+                    logger.info(f"[monitor] Found PR via GitHub search: {pr_url}")
+
+            # A merged PR is the real definition of done — takes priority over Devin's status
+            if pr_url and github_client.is_pr_merged(pr_url):
+                logger.info(f"[monitor] PR merged for issue #{issue_number} — marking finished")
+                db.update_session_status(session_id, "finished", pr_url=pr_url)
+                db.log_event(session_id, "finished", f"pr_merged pr_url={pr_url}")
+                comment = github_client.build_success_comment(session_id, devin_url, pr_url)
+                try:
+                    github_client.post_issue_comment(repo, issue_number, comment)
+                    db.log_event(session_id, "github_comment_posted")
+                except Exception as e:
+                    logger.error(f"[monitor] Failed to post comment: {e}")
+                return
+
+            # Always write the latest status to DB so the dashboard stays current
+            db.update_session_status(session_id, status.status_enum or "running", pr_url=pr_url)
+
             if devin_client.is_terminal(status):
                 logger.info(f"[monitor] Session {session_id} reached terminal status: {status.status_enum}")
                 _handle_terminal(session_id, devin_url, status, issue_number, repo)
@@ -77,15 +100,28 @@ def _handle_terminal(
     issue_number: int,
     repo: str,
 ) -> None:
-    if status.status_enum == "finished":
-        db.update_session_status(session_id, "finished", pr_url=status.pr_url)
-        db.log_event(session_id, "finished", f"pr_url={status.pr_url}")
-        comment = github_client.build_success_comment(session_id, devin_url, status.pr_url)
+    terminal_status = status.status_enum or "unknown"
+
+    # If Devin didn't return a PR URL, fall back to searching GitHub directly
+    pr_url = status.pr_url
+    if not pr_url:
+        logger.info(f"[monitor] No PR from Devin for issue #{issue_number} — searching GitHub")
+        pr_url = github_client.find_pr_for_issue(repo, issue_number)
+        if pr_url:
+            logger.info(f"[monitor] Found PR via GitHub search: {pr_url}")
+
+    # Always persist the PR URL regardless of how the session ended
+    db.update_session_status(session_id, terminal_status, pr_url=pr_url)
+    db.log_event(session_id, "terminal", f"status_enum={terminal_status} pr_url={pr_url}")
+
+    if terminal_status == "finished" or pr_url:
+        # Finished cleanly, or suspended/blocked but still produced a PR
+        comment = github_client.build_success_comment(session_id, devin_url, pr_url)
+        if terminal_status != "finished":
+            comment += f"\n> ⚠️ Session ended with status `{terminal_status}` — Devin may need follow-up."
     else:
-        db.update_session_status(session_id, status.status_enum or "unknown")
-        db.log_event(session_id, "terminal", f"status_enum={status.status_enum}")
         comment = github_client.build_failure_comment(
-            session_id, devin_url, status=status.status_enum or "unknown", error=None
+            session_id, devin_url, status=terminal_status, error=None
         )
 
     try:

@@ -1,22 +1,27 @@
 """
-Devin API v1 client.
-Docs: https://docs.devin.ai/api-reference/v1/overview
+Devin API v3 client.
+Docs: https://docs.devin.ai/api-reference/overview
 """
 
+import logging
 import os
 import httpx
 from dataclasses import dataclass
 
-DEVIN_API_KEY = os.environ["DEVIN_API_KEY"]
-BASE_URL = "https://api.devin.ai/v1"
+logger = logging.getLogger(__name__)
+
+DEVIN_API_KEY = os.environ["DEVIN_API_KEY"]   # starts with cog_
+DEVIN_ORG_ID = os.environ["DEVIN_ORG_ID"]
+BASE_URL = f"https://api.devin.ai/v3/organizations/{DEVIN_ORG_ID}"
 
 HEADERS = {
     "Authorization": f"Bearer {DEVIN_API_KEY}",
     "Content-Type": "application/json",
 }
 
-# Status values that mean the session has reached a terminal state
-TERMINAL_STATUSES = {"finished", "expired", "blocked"}
+# v3 status values that mean the session has reached a terminal state
+# Active states: "running"
+TERMINAL_STATUSES = {"finished", "abandoned", "blocked", "expired", "suspended"}
 
 
 @dataclass
@@ -62,13 +67,18 @@ def get_session_status(session_id: str) -> SessionStatus:
         resp.raise_for_status()
         data = resp.json()
 
-    pr_info = data.get("pull_request")
-    pr_url = pr_info["url"] if pr_info else None
+    # v3: status is a flat string field ("running", "finished", "blocked", etc.)
+    status_val = data.get("status", "")
+    logger.info(f"[devin] session={session_id} status={status_val}")
+
+    # v3: pull_requests is an array; grab the first URL if present
+    prs = data.get("pull_requests") or []
+    pr_url = prs[0].get("url") if prs else None
 
     return SessionStatus(
-        session_id=data["session_id"],
-        status_enum=data.get("status_enum"),
-        status=data.get("status", ""),
+        session_id=data.get("session_id", session_id),
+        status_enum=status_val,   # use status directly as the enum
+        status=status_val,
         pr_url=pr_url,
     )
 
