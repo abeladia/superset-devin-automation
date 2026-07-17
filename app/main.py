@@ -15,9 +15,10 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse
 
 from app import db, devin_client, github_client, monitor
+from app.observability import router as observability_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -179,158 +180,7 @@ def get_session(session_id: str):
     return {"session": session, "events": events}
 
 
-@app.get("/metrics")
-def metrics():
-    """
-    Aggregate observability metrics.
-    Answers: is this system working, and how well?
-    """
-    return db.get_metrics()
-
-
-@app.get("/dashboard", response_class=HTMLResponse)
-def dashboard():
-    """Human-readable HTML dashboard showing system health at a glance."""
-    m = db.get_metrics()
-    sessions = db.get_all_sessions()
-
-    status_badge = {
-        "dispatched": ("#6366f1", "Dispatched"),
-        "running":    ("#f59e0b", "Running"),
-        "working":    ("#f59e0b", "Working"),
-        "finished":   ("#10b981", "Finished"),
-        "blocked":    ("#ef4444", "Blocked"),
-        "abandoned":  ("#ef4444", "Abandoned"),
-        "expired":    ("#ef4444", "Expired"),
-        "suspended":  ("#f59e0b", "Suspended"),
-        "timeout":    ("#ef4444", "Timeout"),
-        "unknown":    ("#6b7280", "Unknown"),
-    }
-
-    rows = ""
-    for s in sessions:
-        color, label = status_badge.get(s["status"], ("#6b7280", s["status"]))
-        pr_cell = f'<a href="{s["pr_url"]}" target="_blank">View PR →</a>' if s.get("pr_url") else "—"
-        devin_cell = f'<a href="{s["devin_url"]}" target="_blank">Session →</a>' if s.get("devin_url") else "—"
-        rows += f"""
-        <tr>
-          <td>#{s['issue_number']}</td>
-          <td class="title">{s.get('issue_title','')}</td>
-          <td><span class="badge" style="background:{color}">{label}</span></td>
-          <td>{devin_cell}</td>
-          <td>{pr_cell}</td>
-          <td class="ts">{s['created_at'][:16].replace('T',' ')}</td>
-        </tr>"""
-
-    activity_rows = ""
-    for e in m["recent_activity"]:
-        activity_rows += f"""
-        <tr>
-          <td class="ts">{e['created_at'][11:19]}</td>
-          <td>#{e['issue_number']}</td>
-          <td><code>{e['event_type']}</code></td>
-          <td class="title">{e.get('payload','') or ''}</td>
-        </tr>"""
-
-    avg_str = f"{m['avg_completion_minutes']} min" if m["avg_completion_minutes"] else "—"
-
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="refresh" content="30">
-  <title>Devin Automation Dashboard</title>
-  <style>
-    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #0f172a; color: #e2e8f0; padding: 32px; }}
-    h1 {{ font-size: 1.5rem; font-weight: 700; margin-bottom: 4px; }}
-    .sub {{ color: #94a3b8; font-size: 0.85rem; margin-bottom: 32px; }}
-    .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-              gap: 16px; margin-bottom: 36px; }}
-    .card {{ background: #1e293b; border-radius: 12px; padding: 20px; }}
-    .card .num {{ font-size: 2.2rem; font-weight: 800; line-height: 1; }}
-    .card .lbl {{ color: #94a3b8; font-size: 0.8rem; margin-top: 6px; text-transform: uppercase; letter-spacing: .05em; }}
-    .green {{ color: #10b981; }}
-    .yellow {{ color: #f59e0b; }}
-    .red {{ color: #ef4444; }}
-    .purple {{ color: #a78bfa; }}
-    h2 {{ font-size: 1rem; font-weight: 600; margin-bottom: 12px; color: #cbd5e1; }}
-    table {{ width: 100%; border-collapse: collapse; background: #1e293b;
-             border-radius: 12px; overflow: hidden; margin-bottom: 36px; }}
-    th {{ text-align: left; padding: 12px 16px; font-size: 0.75rem;
-          text-transform: uppercase; letter-spacing: .05em; color: #64748b;
-          border-bottom: 1px solid #334155; }}
-    td {{ padding: 12px 16px; border-bottom: 1px solid #1e293b; font-size: 0.875rem; vertical-align: middle; }}
-    tr:last-child td {{ border-bottom: none; }}
-    tr:hover td {{ background: #263348; }}
-    .badge {{ display: inline-block; padding: 2px 10px; border-radius: 99px;
-              font-size: 0.75rem; font-weight: 600; color: #fff; }}
-    .title {{ max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
-    .ts {{ color: #64748b; font-size: 0.78rem; white-space: nowrap; }}
-    a {{ color: #60a5fa; text-decoration: none; }}
-    a:hover {{ text-decoration: underline; }}
-    code {{ background: #334155; padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; }}
-    .footer {{ color: #475569; font-size: 0.75rem; margin-top: 8px; }}
-  </style>
-</head>
-<body>
-  <h1>Devin Automation — Superset</h1>
-  <p class="sub">Auto-refreshes every 30 seconds &nbsp;·&nbsp; Repo: {TARGET_REPO}</p>
-
-  <div class="cards">
-    <div class="card">
-      <div class="num purple">{m['total_dispatched']}</div>
-      <div class="lbl">Total Dispatched</div>
-    </div>
-    <div class="card">
-      <div class="num yellow">{m['active']}</div>
-      <div class="lbl">Active</div>
-    </div>
-    <div class="card">
-      <div class="num green">{m['finished']}</div>
-      <div class="lbl">Finished</div>
-    </div>
-    <div class="card">
-      <div class="num red">{m['failed']}</div>
-      <div class="lbl">Failed / Blocked</div>
-    </div>
-    <div class="card">
-      <div class="num green">{m['success_rate_pct']}%</div>
-      <div class="lbl">Success Rate</div>
-    </div>
-    <div class="card">
-      <div class="num green">{m['pr_rate_pct']}%</div>
-      <div class="lbl">PR Rate</div>
-    </div>
-    <div class="card">
-      <div class="num purple">{avg_str}</div>
-      <div class="lbl">Avg Completion</div>
-    </div>
-  </div>
-
-  <h2>Sessions</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Issue</th><th>Title</th><th>Status</th><th>Devin</th><th>PR</th><th>Started</th>
-      </tr>
-    </thead>
-    <tbody>{rows if rows else '<tr><td colspan="6" style="color:#64748b;text-align:center;padding:32px">No sessions yet — trigger an issue label event to get started.</td></tr>'}</tbody>
-  </table>
-
-  <h2>Recent Activity</h2>
-  <table>
-    <thead>
-      <tr><th>Time</th><th>Issue</th><th>Event</th><th>Detail</th></tr>
-    </thead>
-    <tbody>{activity_rows if activity_rows else '<tr><td colspan="4" style="color:#64748b;text-align:center;padding:32px">No activity yet.</td></tr>'}</tbody>
-  </table>
-
-  <p class="footer">Raw data: <a href="/metrics">/metrics</a> &nbsp;·&nbsp; <a href="/sessions">/sessions</a> &nbsp;·&nbsp; <a href="/health">/health</a></p>
-</body>
-</html>"""
-    return HTMLResponse(content=html)
+app.include_router(observability_router)
 
 
 @app.get("/health")

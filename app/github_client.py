@@ -3,8 +3,11 @@ GitHub REST API client.
 Used to post comments back to issues after Devin finishes.
 """
 
+import logging
 import os
 import httpx
+
+logger = logging.getLogger(__name__)
 
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
 BASE_URL = "https://api.github.com"
@@ -38,28 +41,47 @@ def is_pr_merged(pr_url: str) -> bool:
 
 def find_pr_for_issue(repo: str, issue_number: int) -> str | None:
     """
-    Find a PR linked to this issue via the GitHub Issues timeline API.
-    Looks for 'cross-referenced' events where the source is a pull request.
-    More reliable than search since it uses GitHub's own issue linkage tracking.
+    Find a PR linked to this issue.
+    Strategy 1: issue timeline cross-reference events (works when PR body says "Closes #N")
+    Strategy 2: scan recent merged PRs in the repo for any that mention the issue number
     """
-    headers = {**HEADERS, "Accept": "application/vnd.github.mockingbird-preview+json"}
-    url = f"{BASE_URL}/repos/{repo}/issues/{issue_number}/timeline"
+    # --- Strategy 1: timeline cross-reference ---
     try:
+        headers = {**HEADERS, "Accept": "application/vnd.github.mockingbird-preview+json"}
+        url = f"{BASE_URL}/repos/{repo}/issues/{issue_number}/timeline"
         with httpx.Client(timeout=15) as client:
             resp = client.get(url, headers=headers, params={"per_page": 100})
-            if resp.status_code != 200:
-                return None
-            events = resp.json()
+        if resp.status_code == 200:
+            for event in reversed(resp.json()):
+                if event.get("event") == "cross-referenced":
+                    source_issue = event.get("source", {}).get("issue", {})
+                    if source_issue.get("pull_request"):
+                        pr_url = source_issue.get("html_url")
+                        logger.info(f"[github] Found PR via timeline for issue #{issue_number}: {pr_url}")
+                        return pr_url
+        else:
+            logger.warning(f"[github] Timeline API returned {resp.status_code} for issue #{issue_number}")
+    except Exception as e:
+        logger.warning(f"[github] Timeline lookup failed for issue #{issue_number}: {e}")
 
-        # Walk timeline events looking for cross-referenced PRs
-        for event in reversed(events):  # most recent first
-            if event.get("event") == "cross-referenced":
-                source = event.get("source", {})
-                issue = source.get("issue", {})
-                if issue.get("pull_request"):
-                    return issue.get("html_url")
-    except Exception:
-        pass
+    # --- Strategy 2: scan recent PRs for mention of this issue number ---
+    try:
+        url = f"{BASE_URL}/repos/{repo}/pulls"
+        with httpx.Client(timeout=15) as client:
+            resp = client.get(url, headers=HEADERS, params={"state": "all", "per_page": 30, "sort": "updated", "direction": "desc"})
+        if resp.status_code == 200:
+            needle = f"#{issue_number}"
+            for pr in resp.json():
+                body = pr.get("body") or ""
+                title = pr.get("title") or ""
+                if needle in body or needle in title:
+                    pr_url = pr.get("html_url")
+                    logger.info(f"[github] Found PR via repo scan for issue #{issue_number}: {pr_url}")
+                    return pr_url
+    except Exception as e:
+        logger.warning(f"[github] Repo PR scan failed for issue #{issue_number}: {e}")
+
+    logger.info(f"[github] No PR found for issue #{issue_number}")
     return None
 
 
